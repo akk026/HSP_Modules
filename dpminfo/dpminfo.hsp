@@ -1,0 +1,111 @@
+// dpminfo.hsp
+
+/*
+   DPMX の何か
+
+    標準命令のchdpmが遅いので作ってみました。ご自由にお使いください。
+
+    ※暗号化されたファイルを復号化して読み込むことはできません。
+
+    by akk026
+*/
+
+#module "dpminfo"
+
+#deffunc dpmLoad str p1
+	
+	exist p1
+	if (strsize == -1) : return -1
+	
+	sdim buf, strsize
+	bload p1, buf, strsize
+	
+	if (lpeek(buf, 0) == 0x584D5044) {
+		base_ptr = lpeek(buf, 4)
+		file_cnt = lpeek(buf, 8)
+		
+		sdim names, 17, file_cnt
+		dim sizes, file_cnt
+		dim data_ptr, fine_cnt
+		dim encrypted, file_cnt
+	
+		nowpos = 0x10
+		
+		repeat file_cnt
+			memcpy names(cnt), buf, 16, 0, nowpos
+			
+			sizes(cnt) = lpeek(buf, nowpos + 0x1C)
+			data_ptr(cnt) = lpeek(buf, nowpos + 0x18)
+			if (lpeek(buf, nowpos + 0x14)) : encrypted(cnt) = 1
+			
+			nowpos += 0x20
+		loop
+	} else {
+		return -2
+	}
+	
+	return 0
+
+#deffunc dpmFree
+	
+	sdim buf, 4
+	sdim names
+	dim sizes
+	dim data_ptr
+	dim encrypted
+	
+	base_ptr = 0
+	file_cnt = 0
+	
+	nowpos = 0
+	
+	return 0
+
+#defcfunc dpmGetFileCount
+	
+	return file_cnt
+
+#defcfunc dpmGetFileName int p1
+	
+	if (p1 < 0 || p1 + 1 > file_cnt) : return ""
+	
+	return names(p1)
+
+#defcfunc dpmGetFileSize int p1
+	
+	if (p1 < 0 || p1 + 1 > file_cnt) : return 0
+	
+	return sizes(p1)
+
+#defcfunc dpmIsEncrypted int p1
+	
+	if (p1 < 0 || p1 + 1 > file_cnt) : return -1
+	
+	return encrypted(p1)
+
+#deffunc dpmGetData int p1, var p2, var p3
+	
+	if (p1 < 0 || p1 + 1 > file_cnt) : return ""
+	
+	sdim p2, sizes(p1) + 1
+	dupptr tmp, varptr(buf) + base_ptr + data_ptr(p1), sizes(p1), vartype("str")
+	memcpy p2, tmp, sizes(p1)
+	p3 = sizes(p1)
+	
+	return 0
+
+#deffunc dpmFindFile str p1, var p2, var p3
+	
+	repeat file_cnt
+		if (p1 == names(cnt)) {
+			sdim p2, sizes(cnt) + 1
+			dupptr tmp, varptr(buf) + base_ptr + data_ptr(cnt), sizes(cnt), vartype("str")
+			memcpy p2, tmp, sizes(cnt)
+			p3 = sizes(cnt)
+			return 0
+		}
+	loop
+	
+	return -1
+
+#global

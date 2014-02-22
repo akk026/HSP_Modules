@@ -1,0 +1,21 @@
+// sample01.hsp
+
+// dpminfo ‚ÌƒTƒ“ƒvƒ‹ (1)
+
+#include "dpminfo.hsp"
+
+dpmLoad "data.dpm"
+
+repeat dpmGetFileCount()
+	mes "----------------------------"
+	mes "FileName    : " + dpmGetFileName(cnt)
+	mes "Size (byte) : " + dpmGetFileSize(cnt)
+	if (dpmIsEncrypted(cnt)) : mes "IsEncrypted : true" : else : mes "IsEncrypted : false"
+	mes "----------------------------"
+	dpmGetData cnt, buf, size
+	mes buf
+loop
+
+mes "----------------------------"
+
+dpmFree
