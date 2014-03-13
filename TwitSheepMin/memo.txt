@@ -1,0 +1,51 @@
+
+ TwitSheepMin for HSP の簡単なメモ書き
+
+  ・初期化
+
+     twsmInitModule で初期化。p1 にユーザーエージェントを指定する。
+     p2 は gzip を使って通信するかのフラグ。1で使用する。成功すると
+     0が返る。
+
+  ・開放
+
+     twsmUninitModule で開放。これは実行しなくても、終了時に自動的に
+     実行される。常に0が返る。
+
+  ・アクセストークン発行
+
+     twsmIssueAccessToken で発行。p1に Consumer Key を、p2に Consumer Secret
+     を指定する。成功すると0が返る。
+
+  ・アクセストークンの無効化
+
+     twsmInvalidateAccessToken で無効化。成功すると0が返る。
+
+  ・現在のアクセストークンを取得
+
+     twsmGetAccessToken で取得。アクセストークンが返る。
+
+  ・アクセストークンを指定
+
+     twsmSetAccessToken で指定。p1 にアクセストークンを指定する。成功すると0が
+     返る。
+
+  ・認証キーを取得
+
+     twsmGetBasicKey で取得。認証キーが返る。
+
+  ・認証キーを指定
+
+     twsmSetBasicKey で指定。p1 に認証キーを指定する。成功すると0が返る。
+
+  ・その他
+
+     twsmIssueAccessToken で発行したキーは twsmInvalidateAccessToken を実行
+     するまで、永遠に使えるらしい。
+
+     保存しておいたアクセストークンを twsmIssueAccessToken を実行しないで、
+     twsmSetAccessToken で指定してから twsmInvalidateAccessToken でトークンを
+     無効化する場合、twsmSetBasicKey であらかじめ認証キーも指定しておく必要が
+     あるので注意。
+
+  by akk026

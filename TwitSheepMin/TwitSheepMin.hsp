@@ -1,0 +1,459 @@
+
+/*
+   TwitSheepMin for HSP
+           by akk026
+*/
+
+// Twitter の Application-only authentication を HSP から使うモジュールです。
+// ご自由にお使いください。
+
+#module "TwitSheepMin"
+
+#uselib "crypt32.dll"
+#func CryptBinaryToString "CryptBinaryToStringA" var, int, int, int, var
+
+#uselib "kernel32.dll"
+#func MultiByteToWideChar "MultiByteToWideChar" int, int, str, int, sptr, int
+#func WideCharToMultiByte "WideCharToMultiByte" int, int, sptr, int, sptr, int, sptr, sptr
+
+#uselib "wininet.dll"
+#cfunc InternetOpen "InternetOpenA" sptr, int, sptr, sptr, int
+#cfunc InternetConnect "InternetConnectA" int, str, int, sptr, sptr, int, int, int
+#func InternetSetOption "InternetSetOptionA" int, int, var, int
+#func InternetQueryDataAvailable "InternetQueryDataAvailable" int, var, int, int
+#func InternetReadFile "InternetReadFile" int, var, int, var
+#func InternetCloseHandle "InternetCloseHandle" int
+#cfunc HttpOpenRequest "HttpOpenRequestA" int, sptr, sptr, sptr, sptr, sptr, int, int
+#func HttpSendRequest "HttpSendRequestA" int, sptr, int, var, int
+#func HttpQueryInfo "HttpQueryInfoA" int, int, var, var, sptr
+
+#define NULL							0
+
+#define CRYPT_STRING_BASE64				0x00000001
+#define CRYPT_STRING_NOCRLF				0x40000000
+
+#define CP_ACP							0
+#define CP_UTF8							65001
+
+#define INTERNET_OPEN_TYPE_PRECONFIG	0
+#define INTERNET_OPEN_TYPE_DIRECT		1
+
+#define INTERNET_OPTION_HTTP_DECODING	65
+
+#define INTERNET_DEFAULT_HTTPS_PORT		443
+#define INTERNET_SERVICE_HTTP			3
+
+#define INTERNET_FLAG_NO_AUTO_REDIRECT	0x00200000
+#define INTERNET_FLAG_SECURE			0x00800000
+#define INTERNET_FLAG_NO_CACHE_WRITE	0x04000000
+#define INTERNET_FLAG_RELOAD			0x80000000
+
+#define INTERNET_QUERY_RAW_HEADERS_CRLF	22
+
+#define HTTP_QUERY_CONTENT_LENGTH		5
+#define HTTP_QUERY_STATUS_CODE			19
+
+#define HTTP_QUERY_FLAG_NUMBER			0x20000000
+
+#define TWSM_HTTP_HEADER_URL_ENCODED			0x00000001
+#define TWSM_HTTP_HEADER_USE_ACCESS_TOKEN		0x00000002
+
+#defcfunc URLEncode str p1, int p2
+	
+	// URL Encode
+	
+	// p1 : string
+	// p2 : size
+	
+	hexdata = "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"
+	
+	data = p1
+	
+	if (p2) {
+		size = p2
+	} else {
+		size = strlen(p1)
+	}
+	
+	sdim buf, size * 3 + 1
+	
+	buf_pos = 0
+	
+	repeat size
+		memcpy c, data, 1, , cnt
+		//if (c == 0) : break
+	
+		if ((c > '@' && c < '[') || (c > 39 && c < '{') || (c > '/' && c < ':') || (c == '.') || (c == '-') || (c == '_') || (c == '*')) {
+			memcpy buf, c, 1, buf_pos
+		} else {
+			if (c == ' ') {
+				memcpy buf, '+', 1, buf_pos
+			} else {
+				tmp = "%" + hexdata((c & 0xF0) >> 4) + hexdata((c & 0x0F))
+				memcpy buf, tmp, 3, buf_pos
+				buf_pos += 2
+			}
+		}
+		buf_pos++
+	loop
+	
+	return buf
+
+#defcfunc Base64Encode var p1, int p2
+	
+	// Base64 Encode
+	
+	// p1 : data
+	// p2 : size
+	
+	// そのうち API をつかわないものにする予定
+	
+    if (p2 != 0) {
+	    bufSize = p2
+	} else {
+        bufSize = strlen(p1)
+    }
+
+    CryptBinaryToString p1, bufSize, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, 0, encBufSize
+    if (stat) {
+	    sdim encBuf, encBufSize + 1
+	    CryptBinaryToString p1, bufSize, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, varptr(encBuf), encBufSize
+	    if (stat) {
+		    return encBuf
+		}
+	}
+    
+	return 0
+
+#defcfunc UTF8Encode str p1
+	
+	// UTF-8 Encode
+	
+	// p1 : string
+	
+	MultiByteToWideChar CP_ACP, 0, p1, -1, NULL, 0
+	size = stat
+	
+	sdim tmp, size * 2
+	MultiByteToWideChar CP_ACP, 0, p1, -1, varptr(tmp), size
+	
+	WideCharToMultiByte CP_UTF8, 0, varptr(tmp), -1, NULL, 0, NULL, NULL
+	size = stat
+	
+	sdim ret, size
+	WideCharToMultiByte CP_UTF8, 0, varptr(tmp), -1, varptr(ret), size, NULL, NULL
+	
+	return ret
+
+#defcfunc StringArrayToRequestPrm array p1, int p2
+	
+	// StringArrayToRequestPrm
+	
+	// p1 : array
+	// p2 : Encoding ?
+	
+	prm = ""
+	len = length(p1)
+	
+	repeat len
+		if (p1(cnt) == "") : continue
+		if (cnt) : prm += "&"
+		if (p2) : prm += URLEncode(UTF8Encode(p1(cnt))) : else : prm += p1(cnt)
+	loop
+	
+	return prm
+
+#deffunc twsmInitModule str p1, int p2
+	
+	// twsmInitModule
+	
+	// p1 : User Agent
+	// p2 : Use gzip ? (1 : enable)
+	
+	if (hConnect) : return 0
+	
+	if (p1 == "") {
+		user_agent = "TwitSheepMin/0.1"
+	} else {
+		user_agent = p1
+	}
+	
+	hInternet = InternetOpen(user_agent, INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0)
+	if (hInternet == NULL) {
+		return -1
+	}
+	
+	decoding = p2
+	
+	if (decoding == 1) {
+		InternetSetOption hInternet, INTERNET_OPTION_HTTP_DECODING, decoding, 4
+	}
+	
+	hConnect = InternetConnect(hInternet, "api.twitter.com", INTERNET_DEFAULT_HTTPS_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0)
+	if (hConnect == NULL) {
+		InternetCloseHandle hInternet
+		return -2
+	}
+	
+	Size = 4
+	
+	basic_key = ""
+	access_token = ""
+	
+	return 0
+
+#deffunc twsmSendRequest int p1, str p2, str p3, str p4, int p5, var p6, int p7, var p8, var p9, var p10
+	
+	// SendRequest
+	
+	// p2 : Method
+	// p3 : UrlPath
+	// p4 : Headers
+	// p5 : Headers Options
+	// p6 : SendData
+	// p7 : SendDataSize
+	// p8 : StatusCode
+	// p9 : RecvData
+	// p10 : RecvDataSize
+	
+	if (p1) {
+		hConnectUse = p1
+	} else {
+		hConnectUse = hConnect
+	}
+	
+	if (hConnectUse == NULL) {
+		return -1
+	}
+	
+	hNetFile = HttpOpenRequest(hConnectUse, p2, p3, "HTTP/1.1", NULL, NULL, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_AUTO_REDIRECT, 0)
+	if (hNetFile == NULL) {
+		return -2
+	}
+	
+	if (decoding == 1) {
+		header = "Accept-Encoding: gzip, deflate"
+	} else {
+		header = ""
+	}
+	if (p5 & TWSM_HTTP_HEADER_URL_ENCODED) {
+		header += "\nContent-Type: application/x-www-form-urlencoded; charset=UTF-8"
+	}
+	if (p5 & TWSM_HTTP_HEADER_USE_ACCESS_TOKEN) {
+		if (access_token != "") : header += "\nAuthorization: Bearer " + access_token
+	}
+	if (p4 != "") {
+		header += "\n" + p4
+	}
+	header += "\n"
+
+	HttpSendRequest hNetFile, header, strlen(header), p6, p7
+	if (stat == 0) {
+		InternetCloseHandle hNetFile
+		return -3
+	}
+	
+	HttpQueryInfo hNetFile, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, StatusCode, Size, 0
+	
+	p8 = StatusCode
+	
+	HttpQueryInfo hNetFile, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, FileSize, Size, 0
+	InternetQueryDataAvailable hNetFile, AvailableSize, 0, 0
+	
+	if (FileSize == 0) : FileSize = 65535
+	if (AvailableSize == 0) : AvailableSize = 8192
+	
+	AllReadSize = 0
+	error = 0
+	
+	sdim p9, FileSize + 1
+	sdim read_buf, AvailableSize
+	
+	repeat
+		InternetReadFile hNetFile, read_buf, AvailableSize, ReadSize
+		if (stat == 0) {
+			sdim p9
+			error = -6
+			break
+		}
+		if (ReadSize == 0) {
+			break
+		}
+		memcpy p9, read_buf, ReadSize, AllReadSize
+		AllReadSize += ReadSize
+	loop
+	
+	p10 = AllReadSize
+	
+	sdim read_buf
+	
+	InternetCloseHandle hNetFile
+	
+	return error
+
+#defcfunc twsmGetAccessToken
+	
+	// twsmGetAccessToken
+	
+	return access_token
+
+#deffunc twsmSetAccessToken str p1
+	
+	// twsmSetAccessToken
+	
+	// p1 : Access Token
+	
+	if (p1 == "") : return -1
+	
+	access_token = p1
+	
+	return 0
+
+#defcfunc twsmGetBasicKey
+	
+	// twsmGetBasicKey
+	
+	return basic_key
+
+#deffunc twsmSetBasicKey str p1
+	
+	// twsmSetBasicKey
+	
+	// p1 : Basic Key
+	
+	if (p1 == "") : return -1
+	
+	basic_key = p1
+	
+	return 0
+
+#deffunc twsmIssueAccessToken str p1, str p2
+	
+	// twsmIssueAccessToken
+	
+	// p1 : Consumer Key
+	// p2 : Consumer Secret
+	
+	if (access_token != "") {
+		return 0
+	}
+	
+	if (hConnect == NULL) {
+		return -1
+	}
+	
+	if (p1 == "" || p2 == "") {
+		return -2
+	}
+	
+	key = UTF8Encode(p1) + ":" + UTF8Encode(p2)
+	basic_key = Base64Encode(key)
+	body = "grant_type=client_credentials"
+	
+	twsmSendRequest NULL, "POST", "oauth2/token", "Authorization: Basic " + basic_key, TWSM_HTTP_HEADER_URL_ENCODED, body, strlen(body), StatusCode, buf, buf_size
+	if (stat == 0 && StatusCode == 200) {
+		if (instr(buf, , "\"token_type\":\"bearer\"") != -1) {
+			sdim token, 128
+			tmp = instr(buf, ,"\"access_token\":\"")
+			if (tmp != -1) {
+				getstr token, buf, tmp + 16, '\"'
+				access_token = token
+				error = 0
+			} else {
+				error = -5
+			}
+		} else {
+			error = -4
+		}
+	} else {
+		error = -3
+	}
+	
+	if (error != 0) : basic_key = ""
+	
+	return error
+
+#deffunc twsmInvalidateAccessToken
+	
+	// twsmInvalidateAccessToken
+	
+	if (hConnect == NULL) {
+		return -1
+	}
+	
+	if (basic_key == "" || access_token == "") {
+		return -2
+	}
+	
+	body = "access_token=" + access_token
+	
+	twsmSendRequest NULL, "POST", "oauth2/invalidate_token", "Authorization: Basic " + basic_key, TWSM_HTTP_HEADER_URL_ENCODED, body, strlen(body), StatusCode, buf, buf_size
+	if (stat != 0 || StatusCode != 200) {
+		return -3
+	}
+	
+	basic_key = ""
+	access_token = ""
+	
+	return 0
+
+#deffunc twsmSearchTweets array p1
+	
+	// twsmSearchTweets
+	
+	// p1 : Parameters (array)
+	
+	prm = StringArrayToRequestPrm(p1, 1)
+	if (prm == "") {
+		return -1
+	}
+	
+	body = ""
+	
+	twsmSendRequest NULL, "GET", "/1.1/search/tweets.json?" + prm, "", TWSM_HTTP_HEADER_URL_ENCODED | TWSM_HTTP_HEADER_USE_ACCESS_TOKEN, body, 0, StatusCode, buf, buf_size
+	if (stat != 0) {
+		return -2
+	}
+	
+	return buf
+
+#deffunc twsmGetUserTL array p1
+	
+	// twsmGetUserTL
+	
+	// p1 : Parameters (array)
+	
+	prm = StringArrayToRequestPrm(p1, 1)
+	if (prm == "") {
+		return -1
+	}
+	
+	body = ""
+	
+	twsmSendRequest NULL, "GET", "/1.1/statuses/user_timeline.json?" + prm, "", TWSM_HTTP_HEADER_URL_ENCODED | TWSM_HTTP_HEADER_USE_ACCESS_TOKEN, body, 0, StatusCode, buf, buf_size
+	if (stat != 0) {
+		return -2
+	}
+	
+	return buf
+
+#deffunc twsmUninitModule onexit
+	
+	// twsmUninitModule
+	
+	if (hConnect) {
+		InternetCloseHandle hConnect
+		hConnect = NULL
+	}
+	
+	if (hInternet) {
+		InternetCloseHandle hInternet
+		hInternet = NULL
+	}
+	
+	access_token = ""
+	basic_key = ""
+	
+	return 0
+
+#global
